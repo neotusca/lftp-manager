@@ -11,12 +11,14 @@ import re
 import subprocess
 import pymongo
 from bson import ObjectId, Timestamp
+import datetime
 
 
 def connect_lftp():
-    LFTP_STR="/bin/lftp -e 'mirror -N now-1day --dry-run;bye'"
+    #LFTP_STR="/bin/lftp -e 'mirror -N now-1day --dry-run;bye'"
+    LFTP_STR="/bin/lftp -e 'mirror -N now-2day "+src_dir+" "+dst_dir+" --dry-run;bye'"
     #HOST_STR=user+':'+password+'@'+host   # ftp 
-    HOST_STR="-u "+user+", "+"sftp://"+host    # sftp ssh-key
+    HOST_STR=" -u "+user+", "+"sftp://"+host    # sftp ssh-key
     print LFTP_STR+" "+HOST_STR
     result = subprocess.check_output(LFTP_STR+" "+HOST_STR, shell=True)
     return result
@@ -35,86 +37,165 @@ def get_fileinfo(list_string):
             no=no+1
     return result
 
-def processing_tmp(list):
-    range_size=10
-    list_tmp=[]
-    print "processing:",len(list)
-
-    #range_index = range(0, len(list), range_size)
-
-    i=0
-    for file in range(len(list)):
-         if i!=10: 
-             list_tmp.append(list.pop())
-             i=i+1
-         else:
-             print "==",i,"=============="
-             for afile in list_tmp:
-                 print i, afile
-             #print i, len(list_tmp), list_tmp
-             #print list
-             print list_tmp
-             i=0
-             list_tmp=[]
     
 def file_buffering(list):
-    
     dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
-    db = dbconn.MA_FILE_REPO
-    files = db.file_buffer
+    db = dbconn.MA_FILE_REPO     # db
+    file_buffer = db.file_buffer # collection
+    file_info = db.file_info     # collection
+    "clean db"
+    result = file_buffer.remove()
+    print "clean :",result
 
     for no in range(len(list)):
-        diction = { "no": no, "filename": "'"+list.pop()+"'" }
-        #print type(diction), diction
+        file = list.pop()
+        li2 = file.split(host)    # li2 = ['   ','/dir1/dir2/file1']
+        li3 = li2[-1].split('/')  # li3 = ['','dir1','dir2','file1']
+
+        file_name = li3[-1]
+        remote_dir = '/'.join(li3[:-1])
 
         try:
-            files.insert(diction)
+            "query db for duplicate"
+            if file_info.find_one({'fullpath.remote_dir': remote_dir,'fullpath.file_name': file_name}) != None:
+                #print file_info.find_one({'fullpath.remote_dir': remote_dir,'fullpath.file_name': file_name})
+                print 'duplicated'
+                duplicate = True
+            else:
+                print 'new file'
+                duplicate = False
+        except:
+            print "query failed",sys.exc_info()[0]
+            return 1
+
+        try:
+            "insert db for new file"
+            diction = { "no": no+1, "script": file, "file_name": remote_dir+'/'+file_name, "duplicate":duplicate }
+            #print diction
+            file_buffer.insert(diction)
             print "inserted :",diction
         except:
             print "insert failed",sys.exc_info()[0]
+            return 1
 
     dbconn.close()
     return 0
 
     
-def register_fileinfo_db(file_list):
-    print "--register_fileinfo_db-begin--------------"
-    print file_list
-    """
-    [ 6 ] get -O /home/dev/file_input/0515 sftp://ucim:@192.168.254.20/home/ucim/0515/134451
-    [ 9 ] get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/195
-    """
-    """
-    1. connect_db
-    2. compare_filename-list_and_db
-    3. insert_data
+def register_fileinfo_db():
+    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
+    db = dbconn.MA_FILE_REPO     # db
+    file_buffer = db.file_buffer # collection
+    file_info = db.file_info     # collection
 
-    """
-    print "--register_fileinfo_db-end--------------"
+    try:
+        "query db from file_buffer"
+        for file in file_buffer.find({'duplicate':False},{'_id':0,'file_name':1,'no':1}):
+            list = file['file_name'].split('/')
+            file_name = list[-1]
+            remote_dir = '/'.join(list[:-1])
+            #print remote_dir, file_name
 
-    #return result
+            try:
+                "insert db into file_info"
+                diction = { "fullpath" : { "remote_dir" : remote_dir, "file_name" : file_name }, "status" : { "input_yn" : False, "analysis_yn" : False }, \
+                            "hash" : { "md5" : "", "sha256" : "" }, "time" :{ "register_time" : datetime.datetime.utcnow(), "downloaded_time" : "" } }
+                #print diction
+
+                file_info.insert(diction)
+                print "inserted :",diction
+            except:
+                print "insert failed",sys.exc_info()[0]
+                return 1
+
+    except:
+        print "query failed", sys.exc_info()[0]
+        return 1
+
+    dbconn.close()
+    return 0
+
+
+def download_file():
+    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
+    db = dbconn.MA_FILE_REPO     # db
+    file_buffer = db.file_buffer # collection
+    file_info = db.file_info     # collection
+    
+    try:
+        "query db from file_info"
+        for file in file_info.find({'status.input_yn':False,'status.analysis_yn':False},{'_id':0,'fullpath':1,'no':1}):
+            #print file, type(file)
+            dict =  file['fullpath']
+            #print dict['remote_dir']+'/'+dict['file_name']
+            str = dict['remote_dir']+'/'+dict['file_name']
+            #print str, type(str)
+            try:
+                "query db from file_buffer"
+                if file_buffer.find_one({'file_name':str,'duplicate':False},{'script':1,'_id':0}) != None:
+                    #print file_buffer.find_one({'file_name':str})
+                    dict = file_buffer.find_one({'file_name':str,'duplicate':False},{'script':1,'_id':0})
+                    #print dict, type(dict)
+                    script = dict['script']
+                    print script
+
+                    download_file_from_ftp(script)
+                    update_file_info()
+
+
+                else:
+                    print 'not found file',str,'in buffer'
+            except:
+                print "query failed", sys.exc_info()[0]
+                return 1
+
+    except:
+        print "query failed", sys.exc_info()[0]
+        return 1
+
+    return 0
+
+
+def download_file_from_ftp(str):
+    print 'ddd',str
+    LFTP_STR="/bin/lftp -c '"+str+"'"
+    print LFTP_STR
+
+
+    #HOST_STR=user+':'+password+'@'+host   # ftp 
+    #HOST_STR="-u "+user+", "+"sftp://"+host    # sftp ssh-key
+    #print LFTP_STR+" "+HOST_STR
+    #result = subprocess.check_output(LFTP_STR+" "+HOST_STR, shell=True)
+    try:
+        if subprocess.check_output(LFTP_STR, shell=True) != None:
+            print "download succeed"
+        #result = subprocess.check_output(LFTP_STR, shell=True)
+        #print "===result:",result, type(result)
+        #return result
+    except:
+        print 'lftp problem : already file exist or not found directory'
+        return 1
+
+    return 0
+
+
+
 
 
 def connect_db():
-    
     dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
     db = dbconn.MA_FILE_REPO
     files = db.file_info
 
     #doc = {'firstname':'taehun','lastname':'Lee'}
     #doc = { "_id" : ObjectId("5afbb077b50102515a389998"), "file_id" : NumberLong("19"), "fullpath" : { "remote_dir" : "/home/ucim/0516", "file_name" : "193" }, "status" : { "input_yn" : false, "analysis_yn" : false }, "hash" : { "md5" : MD5("00"), "sha256" : "" }, "time" : { "register_time" : Timestamp(1526445600, 0), "downloaded_time" : Timestamp(0, 0) } }
-    doc = { "_id" : ObjectId("5afbb077b50102515a389999"), "file_id" : 19, "fullpath" : { "remote_dir" : "/home/ucim/0516", "file_name" : "193" }, "status" : { "input_yn" : 0, "analysis_yn" : 0}, "hash" : { "md5" : "4047", "sha256" : "" }, "time" : { "register_time" : Timestamp(1526445600, 0), "downloaded_time" : Timestamp(0, 0) } }
-
+    #doc = { "_id" : ObjectId("5afbb077b50102515a389999"), "file_id" : 19, "fullpath" : { "remote_dir" : "/home/ucim/0516", "file_name" : "193" }, "status" : { "input_yn" : 0, "analysis_yn" : 0}, "hash" : { "md5" : "4047", "sha256" : "" }, "time" : { "register_time" : Timestamp(1526445600, 0), "downloaded_time" : Timestamp(0, 0) } }
     #print type(doc), doc <-- dictionary
- 
-
     try:
         files.insert(doc)
     except:
         print "insert failed",sys.exc_info()[0]
-
     dbconn.close()
-
     #return result
 
 
@@ -134,29 +215,40 @@ if __name__ == "__main__":
 
     host = '192.168.254.20'
     sftp_host = 'sftp://192.168.254.20'
-    #src_dir = '/mnt/ftp'
-    dst_dir = '/root/file_input/INPUT'
+    src_dir = '/home/ucim'
+    dst_dir = '/home/dev/file_input/INPUT'
     user = 'ucim'
     password = "'ucim!!'"
     #print("FTP :",dst_dir, host, user, password)
 
-    mongodb_host = '192.168.200.11'
+    #mongodb_host = '192.168.200.11'  # in home
+    mongodb_host = '192.168.254.223'  # in office
 
 
-    #LIST = connect_lftp()
-    #LIST_B = get_fileinfo(LIST)
+    LIST = connect_lftp()
+    print "==1============================================"
+    #print LIST
+    LIST_B = get_fileinfo(LIST)
+    print "==2============================================"
+    #print "22",LIST_B
     #LIST_B=['get -O /home/dev/file_input/0515 sftp://ucim:@192.168.254.20/home/ucim/0515/134451','get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/195']
-    LIST_B=['get -O /home/dev/file_input sftp://ucim:@192.168.254.20/home/ucim/touch-at-0516-0921', 'get -O /home/dev/file_input/.cache/abrt sftp://ucim:@192.168.254.20/home/ucim/.cache/abrt/lastnotification', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/19', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/195', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1950', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1951', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1952', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1953', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1954', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1955', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1956', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1957', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1958', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1959', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/196', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1960', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1961', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1962', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1963', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1964', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1965', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1966', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1967', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1968', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1969', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/197', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1970', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1971', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1972', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1973', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1974', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1975', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1976', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1977', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1978', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1979', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/198', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1980', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1981', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1982', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1983', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1984', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1985', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1986', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1987', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1988', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1989', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/199', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1990', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1991', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1992', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1993', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1994', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1995', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1996', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1997', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1998', 'get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/1999']
-    #print type(LIST_B), LIST_B
-    print len(LIST_B)
-
-    #register_fileinfo_db(LIST_B)
-    #connect_db()
 
     file_buffering(LIST_B)
+    print "==3============================================"
 
+    register_fileinfo_db()
+    print "==4============================================"
+
+    download_file()
+   
+    print "==5============================================"
+
+
+
+    #################################
     # case.1
     #processing():
+        # file_buffer
         # make-range and buffering
         #register_fileinfo_db(LIST_B)
         # connect_db
@@ -164,7 +256,7 @@ if __name__ == "__main__":
         # register_fileinfo
         #download_file()
         #update_filefile_db()
- 
+        #############################
     #################################
     # case.2
     # get_fileinfo_from_ftp
