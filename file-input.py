@@ -6,12 +6,11 @@
     3. download file using file-info in DB
     4. update file-info into DB
 """
-#import os
 import sys
 import re
 import subprocess
 import pymongo
-from bson import ObjectId, int64, Timestamp
+from bson import ObjectId, Timestamp
 
 
 def connect_lftp():
@@ -36,7 +35,7 @@ def get_fileinfo(list_string):
             no=no+1
     return result
 
-def processing(list):
+def processing_tmp(list):
     range_size=10
     list_tmp=[]
     print "processing:",len(list)
@@ -57,27 +56,25 @@ def processing(list):
              print list_tmp
              i=0
              list_tmp=[]
-
-         
-             
-
-
-
-
-    #print list_tmp
-         
-
-
-
-        #list_tmp.append(list.pop())
-
-    #for index in range_index:
-        #print index, list[0:index]
     
+def file_buffering(list):
     
+    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
+    db = dbconn.MA_FILE_REPO
+    files = db.file_buffer
 
+    for no in range(len(list)):
+        diction = { "no": no, "filename": "'"+list.pop()+"'" }
+        #print type(diction), diction
 
+        try:
+            files.insert(diction)
+            print "inserted :",diction
+        except:
+            print "insert failed",sys.exc_info()[0]
 
+    dbconn.close()
+    return 0
 
     
 def register_fileinfo_db(file_list):
@@ -143,7 +140,7 @@ if __name__ == "__main__":
     password = "'ucim!!'"
     #print("FTP :",dst_dir, host, user, password)
 
-    mongodb_host = '192.168.254.223'
+    mongodb_host = '192.168.200.11'
 
 
     #LIST = connect_lftp()
@@ -156,11 +153,11 @@ if __name__ == "__main__":
     #register_fileinfo_db(LIST_B)
     #connect_db()
 
-    processing(LIST_B)
+    file_buffering(LIST_B)
 
     # case.1
     #processing():
-        # make-range
+        # make-range and buffering
         #register_fileinfo_db(LIST_B)
         # connect_db
         # compare_range-and-db
