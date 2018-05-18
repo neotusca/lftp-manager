@@ -6,6 +6,7 @@
     3. download file using file-info in DB
     4. update file-info into DB
 """
+import os
 import sys
 import re
 import subprocess
@@ -15,8 +16,8 @@ import datetime
 
 
 def connect_lftp():
-    #LFTP_STR="/bin/lftp -e 'mirror -N now-1day --dry-run;bye'"
-    LFTP_STR="/bin/lftp -e 'mirror -N now-2day "+src_dir+" "+dst_dir+" --dry-run;bye'"
+    #LFTP_STR="/bin/lftp -e 'mirror -N now-2day --dry-run;bye'"
+    LFTP_STR="/bin/lftp -e 'mirror -N now-30day "+src_dir+" "+dst_dir+" --dry-run;bye'"
     #HOST_STR=user+':'+password+'@'+host   # ftp 
     HOST_STR=" -u "+user+", "+"sftp://"+host    # sftp ssh-key
     print LFTP_STR+" "+HOST_STR
@@ -59,10 +60,10 @@ def file_buffering(list):
             "query db for duplicate"
             if file_info.find_one({'fullpath.remote_dir': remote_dir,'fullpath.file_name': file_name}) != None:
                 #print file_info.find_one({'fullpath.remote_dir': remote_dir,'fullpath.file_name': file_name})
-                print 'duplicated'
+                #print 'duplicated'
                 duplicate = True
             else:
-                print 'new file'
+                #print 'new-file'
                 duplicate = False
         except:
             print "query failed",sys.exc_info()[0]
@@ -73,7 +74,7 @@ def file_buffering(list):
             diction = { "no": no+1, "script": file, "file_name": remote_dir+'/'+file_name, "duplicate":duplicate }
             #print diction
             file_buffer.insert(diction)
-            print "inserted :",diction
+            print "inserted :",diction['file_name'],", duplicate : ",diction['duplicate']
         except:
             print "insert failed",sys.exc_info()[0]
             return 1
@@ -129,35 +130,59 @@ def download_file():
             dict =  file['fullpath']
             #print dict['remote_dir']+'/'+dict['file_name']
             str = dict['remote_dir']+'/'+dict['file_name']
-            #print str, type(str)
+            print "str : ", str, type(str)
             try:
                 "query db from file_buffer"
-                if file_buffer.find_one({'file_name':str,'duplicate':False},{'script':1,'_id':0}) != None:
+                if file_buffer.find_one({'file_name':str},{'script':1,'_id':0}) != None:  #### must deep dive
+                #if file_buffer.find_one({'file_name':str,'duplicate':False},{'script':1,'_id':0}) != None:  #### must deep dive
                     #print file_buffer.find_one({'file_name':str})
-                    dict = file_buffer.find_one({'file_name':str,'duplicate':False},{'script':1,'_id':0})
+                    #dict2 = file_buffer.find_one({'file_name':str,'duplicate':False},{'script':1,'_id':0})
+                    dict2 = file_buffer.find_one({'file_name':str},{'script':1,'_id':0})
                     #print dict, type(dict)
-                    script = dict['script']
-                    print script
+                    script = dict2['script']
 
-                    download_file_from_ftp(script)
-                    update_file_info()
+                    if mkdir_directory(script) == 0:
+                        print "mkdir succeed"
+                    else:
+                        print "mkdir failed"
 
+                    if download_file_from_ftp(script) == 0:
+                        #print "---",complete
+                        print "---",dict['remote_dir'], dict['file_name']
+                        update_file_info(dict['remote_dir'], dict['file_name'])
+                    else:
+                        print "can't make directory"
+                        continue  # skip
 
                 else:
-                    print 'not found file',str,'in buffer'
+                    print 'not found file',str,'in file_buffer'
             except:
-                print "query failed", sys.exc_info()[0]
+                print "query failed - file_buffer - download_file()", sys.exc_info()[0]
                 return 1
 
     except:
-        print "query failed", sys.exc_info()[0]
+        print "query failed - file_info - download_file()", sys.exc_info()[0]
         return 1
+
+    return 0
+
+def mkdir_directory(script):
+    list1 = script.split(' ')
+    dir_name = list1[2]
+    print "dir_name :",list1[2]
+
+    if os.path.exists(dir_name) == False:
+        os.makedirs(dir_name)
+        print dir_name,"is made"
+    else:
+        #make dir
+        print dir_name,"is already exist"
 
     return 0
 
 
 def download_file_from_ftp(str):
-    print 'ddd',str
+    #print 'ddd',str
     LFTP_STR="/bin/lftp -c '"+str+"'"
     print LFTP_STR
 
@@ -178,8 +203,30 @@ def download_file_from_ftp(str):
 
     return 0
 
+def update_file_info(remote_dir, file_name):
+    print "AAA : ", remote_dir, file_name
+    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
+    db = dbconn.MA_FILE_REPO     # db
+    file_buffer = db.file_buffer # collection
+    file_info = db.file_info     # collection
+
+    #print "result : ",result, type(result)
+    
+    try:
+        for file in file_info.find({'status.input_yn':False,'status.analysis_yn':False,'fullpath.remote_dir':remote_dir, 'fullpath.file_name':file_name},{'_id':0,'fullpath':1,'no':1}):
+            print file
+            file_info.update({'status.input_yn':False,'status.analysis_yn':False,'fullpath.remote_dir':remote_dir, 'fullpath.file_name':file_name},{'$set':{ 'status.input_yn':True, 'time.downloaded_time': datetime.datetime.utcnow()}})
+            print "updated : ",file
 
 
+    except:
+        print "query failed at [update_file_info]", sys.exc_info()[0]
+        return 1
+    
+
+
+
+    return 0
 
 
 def connect_db():
@@ -226,18 +273,18 @@ if __name__ == "__main__":
 
 
     LIST = connect_lftp()
-    print "==1============================================"
+    print "==1:get_fileinfo============================================"
     #print LIST
     LIST_B = get_fileinfo(LIST)
-    print "==2============================================"
+    print "==2:file_buffering=========================================="
     #print "22",LIST_B
     #LIST_B=['get -O /home/dev/file_input/0515 sftp://ucim:@192.168.254.20/home/ucim/0515/134451','get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/195']
 
     file_buffering(LIST_B)
-    print "==3============================================"
+    print "==3:register_fileinfo_db===================================="
 
     register_fileinfo_db()
-    print "==4============================================"
+    print "==4:download_file==========================================="
 
     download_file()
    
