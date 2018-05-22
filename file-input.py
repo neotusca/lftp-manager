@@ -1,11 +1,5 @@
 #!/usr/bin/python
 
-"""
-    1. collecting file and directory info from ftp-server
-    2. register file-info into DB
-    3. download file using file-info in DB
-    4. update file-info into DB
-"""
 import os
 import sys
 import re
@@ -16,12 +10,13 @@ import datetime
 
 
 def connect_lftp():
-    #LFTP_STR="/bin/lftp -e 'mirror -N now-2day --dry-run;bye'"
-    LFTP_STR="/bin/lftp -e 'mirror -N now-30day "+src_dir+" "+dst_dir+" --dry-run;bye'"
+    #LFTP_STR="/bin/lftp -e 'mirror -N now-30day "+src_dir+" "+dst_dir+" --dry-run;bye'"
+    LFTP_STR="/bin/lftp -e 'mirror -N now-1day "+src_dir+" "+dst_dir+" --dry-run;bye'"
     #HOST_STR=user+':'+password+'@'+host   # ftp 
     HOST_STR=" -u "+user+", "+"sftp://"+host    # sftp ssh-key
     print LFTP_STR+" "+HOST_STR
     result = subprocess.check_output(LFTP_STR+" "+HOST_STR, shell=True)
+
     return result
     
 
@@ -36,6 +31,7 @@ def get_fileinfo(list_string):
             #print "[",no,"]",file_string
             result.append(file_string)
             no=no+1
+
     return result
 
     
@@ -126,19 +122,13 @@ def download_file():
     try:
         "query db from file_info"
         for file in file_info.find({'status.input_yn':False,'status.analysis_yn':False},{'_id':0,'fullpath':1,'no':1}):
-            #print file, type(file)
             dict =  file['fullpath']
-            #print dict['remote_dir']+'/'+dict['file_name']
             str = dict['remote_dir']+'/'+dict['file_name']
             print "str : ", str, type(str)
             try:
                 "query db from file_buffer"
-                if file_buffer.find_one({'file_name':str},{'script':1,'_id':0}) != None:  #### must deep dive
-                #if file_buffer.find_one({'file_name':str,'duplicate':False},{'script':1,'_id':0}) != None:  #### must deep dive
-                    #print file_buffer.find_one({'file_name':str})
-                    #dict2 = file_buffer.find_one({'file_name':str,'duplicate':False},{'script':1,'_id':0})
+                if file_buffer.find_one({'file_name':str},{'script':1,'_id':0}) != None:  
                     dict2 = file_buffer.find_one({'file_name':str},{'script':1,'_id':0})
-                    #print dict, type(dict)
                     script = dict2['script']
 
                     if mkdir_directory(script) == 0:
@@ -182,15 +172,9 @@ def mkdir_directory(script):
 
 
 def download_file_from_ftp(str):
-    #print 'ddd',str
     LFTP_STR="/bin/lftp -c '"+str+"'"
     print LFTP_STR
 
-
-    #HOST_STR=user+':'+password+'@'+host   # ftp 
-    #HOST_STR="-u "+user+", "+"sftp://"+host    # sftp ssh-key
-    #print LFTP_STR+" "+HOST_STR
-    #result = subprocess.check_output(LFTP_STR+" "+HOST_STR, shell=True)
     try:
         if subprocess.check_output(LFTP_STR, shell=True) != None:
             print "download succeed"
@@ -203,28 +187,22 @@ def download_file_from_ftp(str):
 
     return 0
 
+
 def update_file_info(remote_dir, file_name):
     print "AAA : ", remote_dir, file_name
     dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
     db = dbconn.MA_FILE_REPO     # db
     file_buffer = db.file_buffer # collection
     file_info = db.file_info     # collection
-
     #print "result : ",result, type(result)
-    
     try:
         for file in file_info.find({'status.input_yn':False,'status.analysis_yn':False,'fullpath.remote_dir':remote_dir, 'fullpath.file_name':file_name},{'_id':0,'fullpath':1,'no':1}):
             print file
             file_info.update({'status.input_yn':False,'status.analysis_yn':False,'fullpath.remote_dir':remote_dir, 'fullpath.file_name':file_name},{'$set':{ 'status.input_yn':True, 'time.downloaded_time': datetime.datetime.utcnow()}})
             print "updated : ",file
-
-
     except:
         print "query failed at [update_file_info]", sys.exc_info()[0]
         return 1
-    
-
-
 
     return 0
 
@@ -234,18 +212,12 @@ def connect_db():
     db = dbconn.MA_FILE_REPO
     files = db.file_info
 
-    #doc = {'firstname':'taehun','lastname':'Lee'}
-    #doc = { "_id" : ObjectId("5afbb077b50102515a389998"), "file_id" : NumberLong("19"), "fullpath" : { "remote_dir" : "/home/ucim/0516", "file_name" : "193" }, "status" : { "input_yn" : false, "analysis_yn" : false }, "hash" : { "md5" : MD5("00"), "sha256" : "" }, "time" : { "register_time" : Timestamp(1526445600, 0), "downloaded_time" : Timestamp(0, 0) } }
-    #doc = { "_id" : ObjectId("5afbb077b50102515a389999"), "file_id" : 19, "fullpath" : { "remote_dir" : "/home/ucim/0516", "file_name" : "193" }, "status" : { "input_yn" : 0, "analysis_yn" : 0}, "hash" : { "md5" : "4047", "sha256" : "" }, "time" : { "register_time" : Timestamp(1526445600, 0), "downloaded_time" : Timestamp(0, 0) } }
-    #print type(doc), doc <-- dictionary
     try:
         files.insert(doc)
     except:
         print "insert failed",sys.exc_info()[0]
     dbconn.close()
-    #return result
-
-
+    return result
 
 
 
@@ -267,18 +239,14 @@ if __name__ == "__main__":
     user = 'ucim'
     password = "'ucim!!'"
     #print("FTP :",dst_dir, host, user, password)
-
     #mongodb_host = '192.168.200.11'  # in home
     mongodb_host = '192.168.254.223'  # in office
 
 
     LIST = connect_lftp()
     print "==1:get_fileinfo============================================"
-    #print LIST
     LIST_B = get_fileinfo(LIST)
     print "==2:file_buffering=========================================="
-    #print "22",LIST_B
-    #LIST_B=['get -O /home/dev/file_input/0515 sftp://ucim:@192.168.254.20/home/ucim/0515/134451','get -O /home/dev/file_input/0516 sftp://ucim:@192.168.254.20/home/ucim/0516/195']
 
     file_buffering(LIST_B)
     print "==3:register_fileinfo_db===================================="
@@ -287,25 +255,9 @@ if __name__ == "__main__":
     print "==4:download_file==========================================="
 
     download_file()
-   
     print "==5============================================"
 
-
-
     #################################
-    # case.1
-    #processing():
-        # file_buffer
-        # make-range and buffering
-        #register_fileinfo_db(LIST_B)
-        # connect_db
-        # compare_range-and-db
-        # register_fileinfo
-        #download_file()
-        #update_filefile_db()
-        #############################
-    #################################
-    # case.2
     # get_fileinfo_from_ftp
     #     connect_lftp()  
     #     get_fileinfo()  
