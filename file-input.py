@@ -10,10 +10,13 @@ import datetime
 
 
 def connect_lftp():
-    #LFTP_STR="/bin/lftp -e 'mirror -N now-30day "+src_dir+" "+dst_dir+" --dry-run;bye'"
-    LFTP_STR="/bin/lftp -e 'mirror -N now-1day "+src_dir+" "+dst_dir+" --dry-run;bye'"
-    #HOST_STR=user+':'+password+'@'+host   # ftp 
-    HOST_STR=" -u "+user+", "+"sftp://"+host    # sftp ssh-key
+    #LFTP_STR="/bin/lftp -e 'mirror -N now-30day "+SRC_DIR+" "+DST_DIR+" --dry-run;bye'"
+    #LFTP_STR="/bin/lftp -e 'mirror -N now-1day "+SRC_DIR+" "+DST_DIR+" --dry-run;bye'"
+    #LFTP_STR=LFTP_BIN+" -e 'mirror -N now-1day "+SRC_DIR+" "+DST_DIR+" --dry-run;bye'"
+    LFTP_STR=LFTP_BIN+" -e 'mirror -N now-"+DURATION+" "+SRC_DIR+" "+DST_DIR+" --dry-run;bye'"
+
+    #HOST_STR=USER+':'+PASSWORD+'@'+FTP_HOST   # ftp 
+    HOST_STR=" -u "+USER+", "+"sftp://"+FTP_HOST    # sftp ssh-key
     print LFTP_STR+" "+HOST_STR
     result = subprocess.check_output(LFTP_STR+" "+HOST_STR, shell=True)
 
@@ -36,7 +39,7 @@ def get_fileinfo(list_string):
 
     
 def file_buffering(list):
-    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
+    dbconn = pymongo.MongoClient("mongodb://"+MONGODB_HOST)
     db = dbconn.MA_FILE_REPO     # db
     file_buffer = db.file_buffer # collection
     file_info = db.file_info     # collection
@@ -46,7 +49,7 @@ def file_buffering(list):
 
     for no in range(len(list)):
         file = list.pop()
-        li2 = file.split(host)    # li2 = ['   ','/dir1/dir2/file1']
+        li2 = file.split(FTP_HOST)    # li2 = ['   ','/dir1/dir2/file1']
         li3 = li2[-1].split('/')  # li3 = ['','dir1','dir2','file1']
 
         file_name = li3[-1]
@@ -80,7 +83,7 @@ def file_buffering(list):
 
     
 def register_fileinfo_db():
-    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
+    dbconn = pymongo.MongoClient("mongodb://"+MONGODB_HOST)
     db = dbconn.MA_FILE_REPO     # db
     file_buffer = db.file_buffer # collection
     file_info = db.file_info     # collection
@@ -114,7 +117,7 @@ def register_fileinfo_db():
 
 
 def download_file():
-    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
+    dbconn = pymongo.MongoClient("mongodb://"+MONGODB_HOST)
     db = dbconn.MA_FILE_REPO     # db
     file_buffer = db.file_buffer # collection
     file_info = db.file_info     # collection
@@ -172,7 +175,8 @@ def mkdir_directory(script):
 
 
 def download_file_from_ftp(str):
-    LFTP_STR="/bin/lftp -c '"+str+"'"
+    #LFTP_STR="/bin/lftp -c '"+str+"'"
+    LFTP_STR=LFTP_BIN+" -c '"+str+"'"
     print LFTP_STR
 
     try:
@@ -190,7 +194,7 @@ def download_file_from_ftp(str):
 
 def update_file_info(remote_dir, file_name):
     print "AAA : ", remote_dir, file_name
-    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
+    dbconn = pymongo.MongoClient("mongodb://"+MONGODB_HOST)
     db = dbconn.MA_FILE_REPO     # db
     file_buffer = db.file_buffer # collection
     file_info = db.file_info     # collection
@@ -207,45 +211,38 @@ def update_file_info(remote_dir, file_name):
     return 0
 
 
-def connect_db():
-    dbconn = pymongo.MongoClient("mongodb://"+mongodb_host)
-    db = dbconn.MA_FILE_REPO
-    files = db.file_info
-
-    try:
-        files.insert(doc)
-    except:
-        print "insert failed",sys.exc_info()[0]
-    dbconn.close()
-    return result
-
-
 
 if __name__ == "__main__":
 
-
-    host = '192.168.254.20'
-    sftp_host = 'sftp://192.168.254.20'
-    src_dir = '/home/ucim'
-    dst_dir = '/home/dev/file_input/INPUT'
-    user = 'ucim'
-    password = "'ucim!!'"
-    #print("FTP :",dst_dir, host, user, password)
-    #mongodb_host = '192.168.200.11'  # in home
-    mongodb_host = '192.168.254.223'  # in office
+    FTP_HOST = '127.0.0.1'
+    SRC_DIR = '/home/dev/FTP_ROOT'
+    DST_DIR = '/home/dev/LFTP_INPUT'
+    USER = 'dev'
+    PASSWORD = "'dev!!'"
+    #print("FTP :", FTP_HOST, DST_DIR, "->", SRC_DIR, USER, PASSWORD)
+    #MONGODB_HOST = '192.168.200.11'  # in home
+    MONGODB_HOST = '127.0.0.1'  # in office
+    LFTP_BIN = '/usr/bin/lftp'
+    DURATION = '3day'
 
 
     LIST = connect_lftp()
+
     print "==1:get_fileinfo============================================"
     LIST_B = get_fileinfo(LIST)
+
+    if len(LIST_B) == 0:
+        print "Any new-file inputed in FTP-SERVER"
+        sys.exit()
+
     print "==2:file_buffering=========================================="
-
     file_buffering(LIST_B)
+
     print "==3:register_fileinfo_db===================================="
-
     register_fileinfo_db()
-    print "==4:download_file==========================================="
 
+    print "==4:download_file==========================================="
     download_file()
+
     print "==5============================================"
 
