@@ -222,14 +222,6 @@ def connect_db():
 
 
 if __name__ == "__main__":
-    #if len(sys.argv) < 6:
-    #    sys.exit("Usage: %s LOCAL_DIR REMOTE_DIR HOST USER PASS" %
-    #             (sys.argv[0],))
-    #local_dir = sys.argv[1]
-    #remote_dir = sys.argv[2]
-    #host = sys.argv[3]
-    #user = sys.argv[4]
-    #password = sys.argv[5]
 
 
     host = '192.168.254.20'
@@ -256,18 +248,4 @@ if __name__ == "__main__":
 
     download_file()
     print "==5============================================"
-
-    #################################
-    # get_fileinfo_from_ftp
-    #     connect_lftp()  
-    #     get_fileinfo()  
-    # register_fileinfo_to_db
-    #     connect_db()  
-    #     compare_range_and_db
-    #     register_fileinfo
-    # download_file_from_ftp
-    #     download_file
-    # update_fileinfo_to_db
-    #     update_fileinfo
-    ##################################
 
